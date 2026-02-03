@@ -1,0 +1,9 @@
+body { font-family: system-ui, Arial, sans-serif; margin: 0; background: #f6f7f9; }
+.wrap { max-width: 1200px; margin: 20px auto; padding: 0 12px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card { background: #fff; border-radius: 10px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+label { display: block; margin: 8px 0; }
+input, select { width: 100%; padding: 8px; margin-top: 4px; }
+button { padding: 8px 12px; margin-right: 8px; }
+pre { background: #0b1020; color: #e8e8e8; padding: 10px; border-radius: 8px; overflow: auto; max-height: 320px; }
+.hint { color: #555; }

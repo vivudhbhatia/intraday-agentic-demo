@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Intraday Agentic Liquidity Cockpit</title>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Intraday Agentic Liquidity Cockpit</h1>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Scenario Controls</h2>
+        <label>Scenario ID <input id="scenarioId" value="DELAYED_INFLOW_DEMO"/></label>
+        <label>Seed <input id="seed" value="42"/></label>
+        <button id="btnStart">Start</button>
+        <button id="btnStep">Step +5 min</button>
+        <button id="btnReset">Reset</button>
+      </div>
+
+      <div class="card">
+        <h2>Run Cycle (Agent)</h2>
+        <label>Currency
+          <select id="currency">
+            <option>USD</option><option>EUR</option><option>GBP</option>
+          </select>
+        </label>
+        <button id="btnRun">Assess + Recommend</button>
+      </div>
+
+      <div class="card">
+        <h2>Risk State</h2>
+        <pre id="riskState"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Recommendations</h2>
+        <pre id="recs"></pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Config</h2>
+      <label>SIMULATOR_URL <input id="simUrl" placeholder="https://...run.app"/></label>
+      <label>RISK_ENGINE_URL <input id="riskUrl" placeholder="https://...run.app"/></label>
+      <label>ORCHESTRATOR_URL <input id="orchUrl" placeholder="https://...run.app"/></label>
+      <p class="hint">Paste your Cloud Run URLs here after deploy.</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
