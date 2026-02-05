@@ -1,0 +1,25 @@
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      ["build","-f","ui/Dockerfile",
+       "-t","us-central1-docker.pkg.dev/$PROJECT_ID/intraday-agentic/ui:$COMMIT_SHA","ui"]
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      ["push","us-central1-docker.pkg.dev/$PROJECT_ID/intraday-agentic/ui:$COMMIT_SHA"]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      ["run","deploy","ui-service",
+       "--image","us-central1-docker.pkg.dev/$PROJECT_ID/intraday-agentic/ui:$COMMIT_SHA",
+       "--region","us-central1",
+       "--platform","managed",
+       "--allow-unauthenticated",
+       "--port","8080"]
+
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/intraday-agentic/ui:$COMMIT_SHA"
