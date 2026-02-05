@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import FastAPI, Query
 from datetime import datetime, timedelta, timezone
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, List, Any
 import numpy as np
 
@@ -8,6 +9,17 @@ from shared.app_common.db import fetch_one, fetch_all
 from shared.app_common.models import RiskStateResponse
 
 app = FastAPI(title="risk-engine-service")
+
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # demo only
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 FORECAST_MINUTES = 180
 STEP_MINUTES = 5
