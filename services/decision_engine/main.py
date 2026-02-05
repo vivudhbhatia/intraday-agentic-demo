@@ -10,6 +10,17 @@ from shared.app_common.models import RecommendationRequest, RecommendationRespon
 
 app = FastAPI(title="decision-engine-service")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # demo only
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 RISK_ENGINE_URL = "http://risk-engine-service:8080"  # for local docker compose; override on Cloud Run
 FORECAST_HORIZON_MIN = 180
 
