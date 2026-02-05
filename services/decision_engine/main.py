@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import FastAPI
 from datetime import datetime, timedelta
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
 import httpx
 
@@ -10,7 +11,7 @@ from shared.app_common.models import RecommendationRequest, RecommendationRespon
 
 app = FastAPI(title="decision-engine-service")
 
-from fastapi.middleware.cors import CORSMiddleware
+
 
 app.add_middleware(
     CORSMiddleware,
