@@ -1,6 +1,8 @@
 from __future__ import annotations
+
+import os
 from fastapi import FastAPI
-from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
 from shared.app_common.utils import uid, now_utc
@@ -9,15 +11,38 @@ from shared.app_common.models import RecommendationResponse
 
 app = FastAPI(title="orchestrator-service")
 
-SIM_URL = "http://simulator-service:8080"
-RISK_URL = "http://risk-engine-service:8080"
-DEC_URL  = "http://decision-engine-service:8080"
+# Demo-safe CORS (for browser UI on a different Cloud Run domain)
+# If you want to lock it down later, replace "*" with your ui-service URL.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Prefer env vars (Cloud Run), fall back to internal DNS (future: same VPC/Cloud Run service-to-service)
+SIM_URL = os.getenv("SIM_URL", "http://simulator-service:8080")
+RISK_URL = os.getenv("RISK_URL", "http://risk-engine-service:8080")
+DEC_URL  = os.getenv("DEC_URL",  "http://decision-engine-service:8080")
 
 def _audit(scenario_id: str, service: str, action: str, details: dict):
-    exec_sql("""
-      INSERT INTO audit_log(audit_id, scenario_id, ts, service, action, details)
-      VALUES (%(id)s, %(s)s, %(ts)s, %(svc)s, %(act)s, %(d)s::jsonb)
-    """, {"id": uid("AUD"), "s": scenario_id, "ts": now_utc(), "svc": service, "act": action, "d": str(details).replace("'", '"')})
+    # Store as JSONB safely (minimal risk of quote issues)
+    exec_sql(
+        """
+        INSERT INTO audit_log(audit_id, scenario_id, ts, service, action, details)
+        VALUES (%(id)s, %(s)s, %(ts)s, %(svc)s, %(act)s, %(d)s::jsonb)
+        """,
+        {
+            "id": uid("AUD"),
+            "s": scenario_id,
+            "ts": now_utc(),
+            "svc": service,
+            "act": action,
+            # Convert dict->json string without relying on str()
+            "d": __import__("json").dumps(details),
+        },
+    )
 
 @app.get("/health")
 def health():
@@ -26,27 +51,56 @@ def health():
 @app.post("/run_cycle", response_model=RecommendationResponse)
 async def run_cycle(scenario_id: str, entity_id: str = "E1", currency: str = "USD"):
     async with httpx.AsyncClient(timeout=30.0) as client:
-        _audit(scenario_id, "orchestrator", "ASSESS_START", {"currency": currency})
+        _audit(scenario_id, "orchestrator", "ASSESS_START", {"currency": currency, "entity_id": entity_id})
 
-        risk = (await client.get(f"{RISK_URL}/risk_state", params={"scenario_id": scenario_id, "entity_id": entity_id, "currency": currency})).json()
-        _audit(scenario_id, "orchestrator", "RISK_STATE", {"minutes_to_breach": risk.get("minutes_to_breach"), "buffer_remaining": risk.get("buffer_remaining")})
+        # 1) Pull risk state
+        risk_resp = await client.get(
+            f"{RISK_URL}/risk_state",
+            params={"scenario_id": scenario_id, "entity_id": entity_id, "currency": currency},
+        )
+        risk_resp.raise_for_status()
+        risk = risk_resp.json()
 
-        # Trigger recommendations only if within horizon risk exists (or buffer is low)
+        _audit(
+            scenario_id,
+            "orchestrator",
+            "RISK_STATE",
+            {
+                "minutes_to_breach": risk.get("minutes_to_breach"),
+                "buffer_remaining": risk.get("buffer_remaining"),
+                "early_warning_buffer": risk.get("early_warning_buffer"),
+            },
+        )
+
+        # 2) If no breach projected within horizon, return no-action recommendation
         mtb = risk.get("minutes_to_breach")
-        if mtb is None and float(risk.get("buffer_remaining", 0)) > 0:
-            # Still return a "no action needed" recommendation pack
+        buffer_remaining = float(risk.get("buffer_remaining", 0) or 0)
+
+        if mtb is None and buffer_remaining > 0:
             rec = {
                 "rec_id": uid("REC"),
                 "scenario_id": scenario_id,
-                "as_of": risk["as_of"],
+                "as_of": risk.get("as_of", now_utc()),
                 "entity_id": entity_id,
                 "currency": currency,
                 "ranked_actions": [],
-                "explanation": "No early-warning breach projected in forecast horizon. No action recommended."
+                "explanation": "No early-warning breach projected in forecast horizon. No action recommended.",
             }
             _audit(scenario_id, "orchestrator", "NO_ACTION", rec)
             return rec
 
-        rec = (await client.post(f"{DEC_URL}/recommendations", json={"scenario_id": scenario_id, "entity_id": entity_id, "currency": currency})).json()
-        _audit(scenario_id, "orchestrator", "RECOMMEND", {"rec_id": rec.get("rec_id"), "n_actions": len(rec.get("ranked_actions", []))})
+        # 3) Request recommendations from decision engine
+        dec_resp = await client.post(
+            f"{DEC_URL}/recommendations",
+            json={"scenario_id": scenario_id, "entity_id": entity_id, "currency": currency},
+        )
+        dec_resp.raise_for_status()
+        rec = dec_resp.json()
+
+        _audit(
+            scenario_id,
+            "orchestrator",
+            "RECOMMEND",
+            {"rec_id": rec.get("rec_id"), "n_actions": len(rec.get("ranked_actions", []) or [])},
+        )
         return rec
