@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import FastAPI
 from datetime import datetime, timedelta, timezone
+from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 
 from shared.app_common.db import exec_sql, fetch_all, fetch_one
@@ -8,6 +9,17 @@ from shared.app_common.utils import uid, now_utc
 from shared.app_common.models import ScenarioStartRequest, ScenarioStepRequest
 
 app = FastAPI(title="simulator-service")
+
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # demo only
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def _ensure_scenario_state(scenario_id: str, as_of: datetime):
     exec_sql("""
