@@ -1,77 +1,128 @@
-function v(id){ return document.getElementById(id).value.trim(); }
-function setText(id, obj){ document.getElementById(id).textContent = JSON.stringify(obj, null, 2); }
+const ORCH = window.APP_CONFIG.ORCH_URL;
+const RISK = window.APP_CONFIG.RISK_URL;
+const SIM  = window.APP_CONFIG.SIM_URL;
 
-function cfg(key, fallback){
-  // Reads from ui/config.js: window.APP_CONFIG = {...}
-  const val = window.APP_CONFIG && window.APP_CONFIG[key];
-  return (val && String(val).trim()) ? String(val).trim() : (fallback || "");
+let chart;
+
+function qs(id){ return document.getElementById(id); }
+
+function money(n){ return "$" + Number(n).toLocaleString(); }
+
+function status(r){
+  if(!r.minutes_to_breach) return ["SAFE","status-safe","badge-safe"];
+  if(r.minutes_to_breach < 30) return ["IMMINENT","status-breach","badge-breach"];
+  return ["EARLY WARNING","status-warn","badge-warn"];
 }
 
-async function post(url, body){
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify(body ?? {})
+function drawChart(r){
+  const ctx = qs("chart");
+
+  const labels = r.forecast.map(f=>f.t.slice(11,16));
+  const data = r.forecast.map(f=>f.balance);
+
+  if(chart) chart.destroy();
+
+  chart = new Chart(ctx,{
+    type:"line",
+    data:{
+      labels,
+      datasets:[{
+        label:"Balance",
+        data,
+        borderColor:"#2563eb",
+        tension:0.2
+      },{
+        label:"Buffer",
+        data:labels.map(()=>r.early_warning_buffer),
+        borderColor:"#dc2626",
+        borderDash:[5,5]
+      }]
+    },
+    options:{plugins:{legend:{display:true}}}
   });
-  if(!r.ok) throw new Error(await r.text());
-  return await r.json();
+}
+
+function renderStatus(r){
+  const [txt,cls,bg] = status(r);
+
+  qs("statusBox").innerHTML = `
+    <div class="${cls}">
+      <span class="badge ${bg}">${txt}</span>
+      Balance ${money(r.current_balance)} |
+      Buffer left ${money(r.buffer_remaining)} |
+      ${r.minutes_to_breach? r.minutes_to_breach+" min to breach": "No breach"}
+    </div>
+  `;
+}
+
+function renderDrivers(r){
+  qs("drivers").textContent =
+    r.drivers
+      .slice(0,5)
+      .map(d=>`${d.direction} ${money(d.amount)} ${d.rail}`)
+      .join("\n");
+}
+
+function renderRecs(r){
+  if(!r.ranked_actions?.length){
+    qs("recPanel").innerHTML =
+      "<div>No action required</div><div>"+r.explanation+"</div>";
+    return;
+  }
+
+  qs("recPanel").innerHTML =
+    "<ul class='actions'>" +
+    r.ranked_actions
+      .map(a=>`<li><b>${a.action}</b> – ${a.rationale}</li>`)
+      .join("") +
+    "</ul>";
 }
 
 async function get(url){
   const r = await fetch(url);
-  if(!r.ok) throw new Error(await r.text());
-  return await r.json();
+  if(!r.ok) throw await r.text();
+  return r.json();
 }
 
-// Prefer config.js defaults; fall back to input boxes if you kept them in index.html
-function simUrl(){ return cfg("SIM_URL", v("simUrl")); }
-function riskUrl(){ return cfg("RISK_URL", v("riskUrl")); }
-function orchUrl(){ return cfg("ORCH_URL", v("orchUrl")); }
+async function post(url,b={}){
+  const r = await fetch(url,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(b)
+  });
+  if(!r.ok) throw await r.text();
+  return r.json();
+}
 
-document.getElementById("btnStart").onclick = async () => {
-  try{
-    const scenario = v("scenarioId");
-    const seed = parseInt(v("seed") || "42", 10);
-    const res = await post(`${simUrl()}/scenario/start`, {scenario_id: scenario, seed});
-    setText("riskState", res);
-  } catch(e){
-    setText("riskState", {error: String(e)});
-  }
+async function assess(){
+  const sc = qs("scenarioId").value;
+  const c  = qs("currency").value;
+
+  const risk = await get(
+    `${RISK}/risk_state?scenario_id=${sc}&entity_id=E1&currency=${c}`
+  );
+
+  renderStatus(risk);
+  drawChart(risk);
+  renderDrivers(risk);
+
+  const rec = await post(
+    `${ORCH}/run_cycle?scenario_id=${sc}&entity_id=E1&currency=${c}`,{}
+  );
+
+  renderRecs(rec);
+}
+
+qs("btnStart").onclick = async()=>{
+  await post(`${SIM}/scenario/start`,
+    {scenario_id:qs("scenarioId").value, seed:42});
+  await assess();
 };
 
-document.getElementById("btnStep").onclick = async () => {
-  try{
-    const scenario = v("scenarioId");
-    const res = await post(`${simUrl()}/scenario/step`, {scenario_id: scenario, minutes: 5});
-    setText("riskState", res);
-  } catch(e){
-    setText("riskState", {error: String(e)});
-  }
+qs("btnStep").onclick = async()=>{
+  await post(`${SIM}/scenario/step`,
+    {scenario_id:qs("scenarioId").value, minutes:5});
+  await assess();
 };
 
-document.getElementById("btnReset").onclick = async () => {
-  try{
-    const scenario = v("scenarioId");
-    const res = await post(`${simUrl()}/scenario/reset?scenario_id=${encodeURIComponent(scenario)}`, {});
-    setText("riskState", res);
-  } catch(e){
-    setText("riskState", {error: String(e)});
-  }
-};
-
-document.getElementById("btnRun").onclick = async () => {
-  try{
-    const scenario = v("scenarioId");
-    const currency = v("currency") || "USD";
-
-    // Show risk state
-    const risk = await get(`${riskUrl()}/risk_state?scenario_id=${encodeURIComponent(scenario)}&entity_id=E1&currency=${encodeURIComponent(currency)}`);
-    setText("riskState", risk);
-
-    // Run agent cycle (send {} so Content-Length is set; avoids 411)
-    const recs = await post(`${orchUrl()}/run_cycle?scenario_id=${encodeURIComponent(scenario)}&entity_id=E1&currency=${encodeURIComponent(currency)}`, {});
-    setText("recs", recs);
-  } catch(e){
-    setText("recs", {error: String(e)});
-  }
-};
+qs("btnRun").onclick = assess;
