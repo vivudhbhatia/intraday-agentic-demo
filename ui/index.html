@@ -1,79 +1,187 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Intraday Agentic Liquidity Cockpit</title>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <style>
-    body { font-family: system-ui; margin: 0; background:#f5f7fb; }
-    .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; padding:16px; }
-
-    .card {
-      background:white; padding:16px; border-radius:10px;
-      box-shadow:0 2px 6px rgba(0,0,0,0.08);
-    }
-
-    .status-safe{color:#0a8a3c;font-weight:bold;}
-    .status-warn{color:#d97706;font-weight:bold;}
-    .status-breach{color:#dc2626;font-weight:bold;}
-
-    .badge{
-      padding:4px 8px;border-radius:6px;font-size:13px;
-    }
-
-    .badge-safe{background:#dcfce7;color:#065f46;}
-    .badge-warn{background:#fef3c7;color:#92400e;}
-    .badge-breach{background:#fee2e2;color:#7f1d1d;}
-
-    .actions li{margin-bottom:8px;}
-  </style>
+  <link rel="stylesheet" href="styles.css"/>
 </head>
-
 <body>
 
-<h2 style="padding:16px">Intraday Liquidity Radar – Agentic Control Tower</h2>
+<header class="topbar">
+  <div>
+    <div class="title">Intraday Agentic Liquidity Cockpit</div>
+    <div class="subtitle">Near real-time early warning + agent playbooks + audit</div>
+  </div>
+  <div class="pill" id="statusPill">—</div>
+</header>
 
-<div style="padding:0 16px">
-  Scenario
-  <input id="scenarioId" value="DELAYED_INFLOW_DEMO"/>
-  Seed <input id="seed" value="42" style="width:60px"/>
+<section class="controls card">
+  <div class="row">
+    <div class="field">
+      <label>Scenario</label>
+      <input id="scenarioId" value="DELAYED_INFLOW_DEMO"/>
+    </div>
 
-  <button id="btnStart">Start</button>
-  <button id="btnStep">Step +5 min</button>
+    <div class="field">
+      <label>Seed</label>
+      <input id="seed" value="42"/>
+    </div>
 
-  Currency
-  <select id="currency">
-    <option>USD</option>
-    <option>EUR</option>
-  </select>
+    <div class="field">
+      <label>Entity</label>
+      <select id="entity">
+        <option value="E1">E1</option>
+        <option value="E2">E2</option>
+        <option value="E3">E3</option>
+      </select>
+      <div class="hint">Multi-entity demo (synthetic)</div>
+    </div>
 
-  <button id="btnRun">Assess + Recommend</button>
-</div>
+    <div class="field">
+      <label>Currency</label>
+      <select id="currency">
+        <option>USD</option>
+        <option>EUR</option>
+      </select>
+    </div>
 
-<div class="grid">
+    <div class="btns">
+      <button id="btnStart" class="btn primary">Start</button>
+      <button id="btnStep" class="btn">Step +5 min</button>
+      <button id="btnRun" class="btn primary">Assess + Recommend</button>
+      <button id="btnReset" class="btn danger">Reset</button>
+    </div>
+  </div>
 
+  <div class="row">
+    <div class="toggle">
+      <input type="checkbox" id="autorefresh"/>
+      <label for="autorefresh">Live mode (refresh every 2s)</label>
+    </div>
+
+    <div class="toggle">
+      <input type="checkbox" id="autoagent"/>
+      <label for="autoagent">Auto-run agent on warnings</label>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="field small">
+      <label>Warning threshold (min)</label>
+      <input id="warnMins" value="60"/>
+    </div>
+
+    <div class="field small">
+      <label>Breach threshold (min)</label>
+      <input id="breachMins" value="30"/>
+    </div>
+  </div>
+</section>
+
+<section class="grid">
   <div class="card">
-    <h3>Status</h3>
-
-    <div id="statusBox"></div>
-
+    <div class="card-title">Forecast & Buffer</div>
     <canvas id="chart" height="120"></canvas>
 
-    <h4>Key Drivers</h4>
-    <pre id="drivers"></pre>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="kpi-label">Current Balance</div>
+        <div class="kpi-value" id="kpiBalance">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Early Warning Buffer</div>
+        <div class="kpi-value" id="kpiBuffer">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Buffer Remaining</div>
+        <div class="kpi-value" id="kpiRemaining">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Minutes to Breach</div>
+        <div class="kpi-value" id="kpiMTB">—</div>
+      </div>
+    </div>
+
+    <div class="card-title">Drivers (Top 8)</div>
+    <table class="tbl" id="driversTbl">
+      <thead>
+        <tr><th>Time</th><th>Dir</th><th>Amt</th><th>Rail</th><th>Status</th><th>Priority</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <div class="card">
-    <h3>Agent Recommendations</h3>
-    <div id="recPanel"></div>
+  <div class="stack">
+    <div class="card">
+      <div class="card-title">Alerts</div>
+      <div id="alerts" class="alerts"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">What-if (UI-only overlay)</div>
+      <div class="row">
+        <div class="field">
+          <label>Outflow shock (%)</label>
+          <input id="shockPct" type="range" min="0" max="50" value="0"/>
+          <div class="hint"><span id="shockPctVal">0</span>%</div>
+        </div>
+        <div class="field">
+          <label>Inflow delay (min)</label>
+          <input id="delayMin" type="range" min="0" max="60" value="0"/>
+          <div class="hint"><span id="delayMinVal">0</span> min</div>
+        </div>
+        <div class="btns">
+          <button class="btn" id="btnApplyWhatif">Apply</button>
+          <button class="btn" id="btnClearWhatif">Clear</button>
+        </div>
+      </div>
+      <div class="hint">Overlay changes chart only (sellable demo); backend what-if can be added later.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Agent Recommendations</div>
+      <div id="recs"></div>
+
+      <div class="card-title">Approval</div>
+      <div class="row">
+        <div class="field">
+          <label>Selected action (from agent)</label>
+          <input id="selectedAction" placeholder="click an action below" readonly/>
+        </div>
+        <div class="btns">
+          <button class="btn primary" id="btnApprove">Approve</button>
+          <button class="btn" id="btnReject">Reject</button>
+        </div>
+      </div>
+      <pre id="approvalResp" class="pre"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Config</div>
+      <div class="row">
+        <div class="field">
+          <label>SIMULATOR_URL</label>
+          <input id="simUrl"/>
+        </div>
+        <div class="field">
+          <label>RISK_ENGINE_URL</label>
+          <input id="riskUrl"/>
+        </div>
+        <div class="field">
+          <label>ORCHESTRATOR_URL</label>
+          <input id="orchUrl"/>
+        </div>
+      </div>
+      <div class="hint">Auto-filled from config.js (editable for demos).</div>
+    </div>
   </div>
+</section>
 
-</div>
-
-<!-- config with your URLs -->
 <script src="config.js"></script>
 <script src="app.js"></script>
-
 </body>
 </html>
