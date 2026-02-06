@@ -9,6 +9,10 @@ from shared.app_common.utils import uid, now_utc
 from shared.app_common.db import exec_sql
 from shared.app_common.models import RecommendationResponse
 
+from pydantic import BaseModel
+from typing import Any, Dict, Optional
+
+
 app = FastAPI(title="orchestrator-service")
 
 # Demo-safe CORS (for browser UI on a different Cloud Run domain)
@@ -104,3 +108,33 @@ async def run_cycle(scenario_id: str, entity_id: str = "E1", currency: str = "US
             {"rec_id": rec.get("rec_id"), "n_actions": len(rec.get("ranked_actions", []) or [])},
         )
         return rec
+
+class ApprovalRequest(BaseModel):
+    scenario_id: str
+    entity_id: str = "E1"
+    currency: str = "USD"
+    decision: str  # APPROVE / REJECT
+    action: Dict[str, Any]
+
+@app.post("/actions/approve")
+async def approve_action(req: ApprovalRequest):
+    approval_id = uid("APR")
+    exec_sql(
+        """
+        INSERT INTO action_approvals(approval_id, scenario_id, ts, entity_id, currency, decision, action)
+        VALUES (%(id)s, %(s)s, %(ts)s, %(e)s, %(c)s, %(d)s, %(a)s::jsonb)
+        """,
+        {
+            "id": approval_id,
+            "s": req.scenario_id,
+            "ts": now_utc(),
+            "e": req.entity_id,
+            "c": req.currency,
+            "d": req.decision,
+            "a": __import__("json").dumps(req.action),
+        },
+    )
+
+    _audit(req.scenario_id, "orchestrator", "ACTION_"+req.decision, {"approval_id": approval_id, "action": req.action})
+    return {"ok": True, "approval_id": approval_id}
+
