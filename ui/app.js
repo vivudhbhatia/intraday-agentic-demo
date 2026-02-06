@@ -11,7 +11,6 @@ function setCfgInputs(){
   qs("riskUrl").value = cfg("RISK_URL", qs("riskUrl").value);
   qs("orchUrl").value = cfg("ORCH_URL", qs("orchUrl").value);
 }
-
 function SIM(){ return v("simUrl"); }
 function RISK(){ return v("riskUrl"); }
 function ORCH(){ return v("orchUrl"); }
@@ -31,7 +30,6 @@ async function get(url){
   if(!r.ok) throw new Error(await r.text());
   return await r.json();
 }
-
 async function post(url, body){
   const r = await fetch(url, {
     method:"POST",
@@ -42,9 +40,6 @@ async function post(url, body){
   return await r.json();
 }
 
-let chart = null;
-let whatif = { shockPct: 0, delayMin: 0 };
-
 function severity(minutesToBreach, warnMins, breachMins){
   if(minutesToBreach === null || minutesToBreach === undefined) return {level:"SAFE", css:"ok"};
   const mtb = Number(minutesToBreach);
@@ -53,41 +48,12 @@ function severity(minutesToBreach, warnMins, breachMins){
   return {level:"WATCH", css:"warn"};
 }
 
-function applyWhatifToForecast(risk){
-  // UI-only overlay: increase outflows by shock% and delay inflows by delayMin by shifting IN event times in drivers
-  // For simplicity: we adjust the forecast curve by subtracting a proportional amount based on shockPct.
-  if(!risk || !risk.forecast) return risk;
-
-  const shock = Number(whatif.shockPct || 0) / 100;
-  const delay = Number(whatif.delayMin || 0);
-
-  const outflowApprox = shock * 0.02; // small but visible adjustment on forecast (demo)
-  const adjusted = structuredClone(risk);
-
-  adjusted.forecast = adjusted.forecast.map((p, i) => {
-    const base = Number(p.balance);
-    const drift = base * outflowApprox * (i/Math.max(1, adjusted.forecast.length-1));
-    return {...p, balance: base - drift};
-  });
-
-  // If delayMin applied, we "weaken" near-term inflow effect a bit (demo)
-  if(delay > 0){
-    adjusted.forecast = adjusted.forecast.map((p, i) => {
-      const base = Number(p.balance);
-      const penalty = base * 0.004 * Math.min(1, delay/60) * (1 - i/Math.max(1, adjusted.forecast.length-1));
-      return {...p, balance: base - penalty};
-    });
-  }
-  return adjusted;
-}
-
-function drawChart(risk){
+let chart = null;
+function drawMainChart(risk){
   const ctx = qs("chart");
-  const rr = applyWhatifToForecast(risk);
-
-  const labels = rr.forecast.map(f => (f.t || "").slice(11,16));
-  const balances = rr.forecast.map(f => Number(f.balance));
-  const bufferLine = labels.map(() => Number(rr.early_warning_buffer));
+  const labels = (risk.forecast||[]).map(f => (f.t||"").slice(11,16));
+  const balances = (risk.forecast||[]).map(f => Number(f.balance));
+  const bufferLine = labels.map(() => Number(risk.early_warning_buffer));
 
   if(chart) chart.destroy();
 
@@ -135,11 +101,9 @@ function renderDrivers(r){
 function renderAlerts(r){
   const warnMins = Number(v("warnMins") || 60);
   const breachMins = Number(v("breachMins") || 30);
-
   const sev = severity(r.minutes_to_breach, warnMins, breachMins);
-  const alerts = [];
 
-  // Primary alert
+  const alerts = [];
   if(r.minutes_to_breach === null || r.minutes_to_breach === undefined){
     alerts.push({css:"ok", t:"Stable", d:"No early-warning breach projected in current horizon."});
   } else if(Number(r.minutes_to_breach) <= breachMins){
@@ -148,16 +112,10 @@ function renderAlerts(r){
     alerts.push({css:"warn", t:"Early warning", d:`Projected breach in ${r.minutes_to_breach} min. Prepare playbooks.`});
   }
 
-  // Secondary: large queued outflows
   const queued = (r.drivers||[]).filter(x => x.direction==="OUT" && x.status==="QUEUED");
   if(queued.length){
     const amt = queued.reduce((s,x)=>s+Number(x.amount||0),0);
     alerts.push({css:"warn", t:"Queued outflows", d:`${queued.length} queued outflows (~${money(amt)}). Queue management may help.`});
-  }
-
-  // What-if banner
-  if(Number(whatif.shockPct)>0 || Number(whatif.delayMin)>0){
-    alerts.push({css:"warn", t:"What-if overlay active", d:`Outflow shock ${whatif.shockPct}% | Inflow delay ${whatif.delayMin} min (visual overlay).`});
   }
 
   const box = qs("alerts");
@@ -169,7 +127,6 @@ function renderAlerts(r){
     box.appendChild(div);
   });
 
-  // Header pill
   const pill = qs("statusPill");
   pill.textContent = sev.level;
   pill.style.borderColor =
@@ -196,7 +153,7 @@ function renderRecs(rec){
         <div class="hint">score: ${a.score ?? "—"}</div>
       </div>
       <div class="actionWhy">${a.rationale || a.reason || "—"}</div>
-      <button class="btn actionBtn" data-action="${encodeURIComponent(JSON.stringify(a))}">Select for approval</button>
+      <button class="btn actionBtn">Select for approval</button>
     `;
     div.querySelector("button").onclick = () => {
       qs("selectedAction").value = a.action || "ACTION";
@@ -206,20 +163,159 @@ function renderRecs(rec){
   });
 }
 
+function setLastRefresh(){
+  const d = new Date();
+  qs("lastRef").textContent = `Last refresh: ${d.toLocaleTimeString()}`;
+}
+
+async function riskState(entity_id, currency){
+  const scenario = v("scenarioId");
+  return await get(`${RISK()}/risk_state?scenario_id=${encodeURIComponent(scenario)}&entity_id=${encodeURIComponent(entity_id)}&currency=${encodeURIComponent(currency)}`);
+}
+
+/* ----- Portfolio tiles + sparklines ----- */
+
+const PORT_ENTITIES = ["E1","E2","E3"];
+const PORT_CCY = ["USD","EUR"];
+const tileCharts = new Map();
+
+function tileKey(e,c){ return `${e}__${c}`; }
+
+function drawSpark(canvas, forecast, buffer){
+  const labels = forecast.map(f => (f.t||"").slice(11,16));
+  const balances = forecast.map(f => Number(f.balance));
+  const buf = labels.map(()=>Number(buffer));
+
+  const existing = tileCharts.get(canvas);
+  if(existing) existing.destroy();
+
+  const ch = new Chart(canvas, {
+    type:"line",
+    data:{ labels, datasets:[
+      {label:"b", data:balances, borderWidth:1.5, tension:0.3, pointRadius:0},
+      {label:"buf", data:buf, borderDash:[4,4], borderWidth:1.2, pointRadius:0}
+    ]},
+    options:{
+      responsive:true,
+      plugins:{legend:{display:false}, tooltip:{enabled:false}},
+      scales:{x:{display:false}, y:{display:false}}
+    }
+  });
+  tileCharts.set(canvas, ch);
+}
+
+function renderPortfolio(tiles){
+  const grid = qs("portfolioGrid");
+  grid.innerHTML = "";
+
+  tiles.forEach(t => {
+    const sev = t.sev;
+    const div = document.createElement("div");
+    div.className = "tile";
+    div.innerHTML = `
+      <div class="tileTop">
+        <div class="tileTitle">${t.entity} • ${t.currency}</div>
+        <div class="chip ${sev.css}">${sev.level === "IMMINENT BREACH" ? "IMMINENT" : sev.level === "EARLY WARNING" ? "WARNING" : "SAFE"}</div>
+      </div>
+      <div class="tileMid">
+        <div>
+          <div class="tileNum">${money(t.balance)}</div>
+          <div class="tileSub">buffer left ${money(t.remaining)}</div>
+        </div>
+        <div>
+          <div class="tileNum">${t.mtb == null ? "—" : t.mtb+"m"}</div>
+          <div class="tileSub">to breach</div>
+        </div>
+      </div>
+      <div class="sparkWrap"><canvas class="spark"></canvas></div>
+    `;
+
+    div.onclick = async () => {
+      qs("entity").value = t.entity;
+      qs("currency").value = t.currency;
+      await assessAndMaybeRunAgent({forceAgent:false});
+    };
+
+    grid.appendChild(div);
+
+    const canvas = div.querySelector("canvas");
+    drawSpark(canvas, t.forecast, t.buffer);
+  });
+}
+
+function renderExecStrip(tiles){
+  const warnMins = Number(v("warnMins") || 60);
+  const breachMins = Number(v("breachMins") || 30);
+
+  let warnCount = 0, breachCount = 0;
+  let worst = null;
+
+  tiles.forEach(t=>{
+    const mtb = t.mtb;
+    if(mtb != null){
+      if(mtb <= breachMins) breachCount++;
+      else if(mtb <= warnMins) warnCount++;
+      worst = (worst == null) ? mtb : Math.min(worst, mtb);
+    }
+  });
+
+  const status =
+    breachCount > 0 ? "IMMINENT BREACH RISK" :
+    warnCount > 0 ? "ELEVATED / EARLY WARNING" :
+    "STABLE";
+
+  qs("execStatus").textContent = status;
+  qs("execWorstMTB").textContent = worst == null ? "—" : `${worst} min`;
+  qs("execWarnCount").textContent = String(warnCount);
+  qs("execBreachCount").textContent = String(breachCount);
+}
+
+async function refreshPortfolio(){
+  const warnMins = Number(v("warnMins") || 60);
+  const breachMins = Number(v("breachMins") || 30);
+
+  const tiles = [];
+  for(const e of PORT_ENTITIES){
+    for(const c of PORT_CCY){
+      try{
+        const r = await riskState(e,c);
+        const sev = severity(r.minutes_to_breach, warnMins, breachMins);
+        tiles.push({
+          entity:e, currency:c,
+          balance:r.current_balance,
+          remaining:r.buffer_remaining,
+          buffer:r.early_warning_buffer,
+          mtb:r.minutes_to_breach,
+          forecast:r.forecast || [],
+          sev
+        });
+      }catch(err){
+        tiles.push({
+          entity:e, currency:c, balance:null, remaining:null, buffer:null, mtb:null, forecast:[],
+          sev:{level:"OFFLINE", css:"bad"}
+        });
+      }
+    }
+  }
+
+  renderPortfolio(tiles);
+  renderExecStrip(tiles);
+}
+
+/* ----- Main assess ----- */
+
 async function assessAndMaybeRunAgent({forceAgent=false}={}){
   const scenario = v("scenarioId");
   const entity_id = v("entity");
   const currency = v("currency");
 
-  // 1) Risk state
   const risk = await get(`${RISK()}/risk_state?scenario_id=${encodeURIComponent(scenario)}&entity_id=${encodeURIComponent(entity_id)}&currency=${encodeURIComponent(currency)}`);
 
   renderKPIs(risk);
-  drawChart(risk);
+  drawMainChart(risk);
   renderDrivers(risk);
   renderAlerts(risk);
 
-  // 2) Agent
   const warnMins = Number(v("warnMins") || 60);
   const mtb = risk.minutes_to_breach;
   const shouldRun = forceAgent || (qs("autoagent").checked && mtb !== null && mtb !== undefined && Number(mtb) <= warnMins);
@@ -228,30 +324,46 @@ async function assessAndMaybeRunAgent({forceAgent=false}={}){
     const rec = await post(`${ORCH()}/run_cycle?scenario_id=${encodeURIComponent(scenario)}&entity_id=${encodeURIComponent(entity_id)}&currency=${encodeURIComponent(currency)}`, {});
     renderRecs(rec);
   }
+
+  setLastRefresh();
+  await refreshPortfolio();
 }
 
-function wireWhatif(){
-  const sp = qs("shockPct");
-  const dm = qs("delayMin");
-  qs("shockPctVal").textContent = sp.value;
-  qs("delayMinVal").textContent = dm.value;
+/* ----- Playback ----- */
 
-  sp.oninput = () => qs("shockPctVal").textContent = sp.value;
-  dm.oninput = () => qs("delayMinVal").textContent = dm.value;
+let playTimer = null;
 
-  qs("btnApplyWhatif").onclick = async () => {
-    whatif.shockPct = Number(sp.value);
-    whatif.delayMin = Number(dm.value);
-    await assessAndMaybeRunAgent({forceAgent:false});
-  };
-  qs("btnClearWhatif").onclick = async () => {
-    sp.value = 0; dm.value = 0;
-    whatif = {shockPct:0, delayMin:0};
-    qs("shockPctVal").textContent = "0";
-    qs("delayMinVal").textContent = "0";
-    await assessAndMaybeRunAgent({forceAgent:false});
-  };
+async function doStep(){
+  const scenario = v("scenarioId");
+  const step = Number(qs("stepSize").value || 5);
+  await post(`${SIM()}/scenario/step`, {scenario_id: scenario, minutes: step});
+  await assessAndMaybeRunAgent({forceAgent:false});
 }
+
+function play(){
+  const interval = Number(qs("playSpeed").value || 2000);
+  if(playTimer) clearInterval(playTimer);
+  playTimer = setInterval(async ()=>{ try{ await doStep(); }catch(e){} }, interval);
+}
+function pause(){
+  if(playTimer) clearInterval(playTimer);
+  playTimer = null;
+}
+
+/* ----- Demo tour ----- */
+
+function tour(){
+  alert(
+`Demo tour (60 seconds):
+1) Start scenario → portfolio tiles populate (multi-entity / multi-ccy)
+2) Press Play → forecast curves move in near real time
+3) Watch status chip flip SAFE → WARNING → IMMINENT
+4) Auto-run agent on warnings to show playbooks
+5) Select an action → Approve to show governance + audit trail`
+  );
+}
+
+/* ----- Buttons ----- */
 
 function wireButtons(){
   qs("btnStart").onclick = async () => {
@@ -261,20 +373,20 @@ function wireButtons(){
     await assessAndMaybeRunAgent({forceAgent:true});
   };
 
-  qs("btnStep").onclick = async () => {
-    const scenario = v("scenarioId");
-    await post(`${SIM()}/scenario/step`, {scenario_id: scenario, minutes: 5});
-    await assessAndMaybeRunAgent({forceAgent:false});
+  qs("btnRun").onclick = async () => {
+    await assessAndMaybeRunAgent({forceAgent:true});
   };
 
+  qs("btnStep").onclick = doStep;
+
+  qs("btnPlay").onclick = play;
+  qs("btnPause").onclick = pause;
+
   qs("btnReset").onclick = async () => {
+    pause();
     const scenario = v("scenarioId");
     await post(`${SIM()}/scenario/reset?scenario_id=${encodeURIComponent(scenario)}`, {});
     await assessAndMaybeRunAgent({forceAgent:false});
-  };
-
-  qs("btnRun").onclick = async () => {
-    await assessAndMaybeRunAgent({forceAgent:true});
   };
 
   qs("btnApprove").onclick = async () => {
@@ -287,13 +399,8 @@ function wireButtons(){
       return;
     }
     const action = JSON.parse(payload);
-    // Requires backend endpoint (section B)
     const resp = await post(`${ORCH()}/actions/approve`, {
-      scenario_id: scenario,
-      entity_id,
-      currency,
-      decision: "APPROVE",
-      action
+      scenario_id, entity_id, currency, decision:"APPROVE", action
     });
     qs("approvalResp").textContent = JSON.stringify(resp, null, 2);
   };
@@ -309,33 +416,17 @@ function wireButtons(){
     }
     const action = JSON.parse(payload);
     const resp = await post(`${ORCH()}/actions/approve`, {
-      scenario_id: scenario,
-      entity_id,
-      currency,
-      decision: "REJECT",
-      action
+      scenario_id, entity_id, currency, decision:"REJECT", action
     });
     qs("approvalResp").textContent = JSON.stringify(resp, null, 2);
   };
+
+  qs("btnTour").onclick = tour;
 }
 
-let timer = null;
-function wireLiveMode(){
-  qs("autorefresh").onchange = async () => {
-    if(qs("autorefresh").checked){
-      timer = setInterval(async () => {
-        try { await assessAndMaybeRunAgent({forceAgent:false}); } catch(e) { /* ignore */ }
-      }, 2000);
-    } else {
-      if(timer) clearInterval(timer);
-      timer = null;
-    }
-  };
-}
-
+/* ----- Init ----- */
 (function init(){
   setCfgInputs();
-  wireWhatif();
   wireButtons();
-  wireLiveMode();
+  refreshPortfolio().catch(()=>{});
 })();
