@@ -6,7 +6,6 @@
   <title>Intraday Agentic Liquidity Cockpit</title>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
   <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
@@ -14,11 +13,40 @@
 <header class="topbar">
   <div>
     <div class="title">Intraday Agentic Liquidity Cockpit</div>
-    <div class="subtitle">Near real-time early warning + agent playbooks + audit</div>
+    <div class="subtitle">
+      Early-warning radar • Forecast curve • Agent playbooks • Approvals • Audit
+      <span class="dot">•</span>
+      <span id="lastRef">Last refresh: —</span>
+    </div>
   </div>
-  <div class="pill" id="statusPill">—</div>
+
+  <div class="right">
+    <div class="pill" id="statusPill">—</div>
+    <button class="btn" id="btnTour">Demo tour</button>
+  </div>
 </header>
 
+<!-- Executive strip -->
+<section class="execstrip">
+  <div class="exec card">
+    <div class="execLabel">Portfolio status</div>
+    <div class="execValue" id="execStatus">—</div>
+  </div>
+  <div class="exec card">
+    <div class="execLabel">Worst minutes-to-breach</div>
+    <div class="execValue" id="execWorstMTB">—</div>
+  </div>
+  <div class="exec card">
+    <div class="execLabel">Entities in early warning</div>
+    <div class="execValue" id="execWarnCount">—</div>
+  </div>
+  <div class="exec card">
+    <div class="execLabel">Entities imminent</div>
+    <div class="execValue" id="execBreachCount">—</div>
+  </div>
+</section>
+
+<!-- Controls -->
 <section class="controls card">
   <div class="row">
     <div class="field">
@@ -38,7 +66,6 @@
         <option value="E2">E2</option>
         <option value="E3">E3</option>
       </select>
-      <div class="hint">Multi-entity demo (synthetic)</div>
     </div>
 
     <div class="field">
@@ -51,16 +78,31 @@
 
     <div class="btns">
       <button id="btnStart" class="btn primary">Start</button>
-      <button id="btnStep" class="btn">Step +5 min</button>
       <button id="btnRun" class="btn primary">Assess + Recommend</button>
       <button id="btnReset" class="btn danger">Reset</button>
     </div>
   </div>
 
-  <div class="row">
-    <div class="toggle">
-      <input type="checkbox" id="autorefresh"/>
-      <label for="autorefresh">Live mode (refresh every 2s)</label>
+  <!-- Timeline / playback -->
+  <div class="row playback">
+    <div class="btns">
+      <button class="btn" id="btnStep">Step +</button>
+      <select id="stepSize">
+        <option value="5">5 min</option>
+        <option value="10">10 min</option>
+        <option value="15">15 min</option>
+      </select>
+
+      <button class="btn" id="btnPlay">Play</button>
+      <button class="btn" id="btnPause">Pause</button>
+
+      <label class="tinyLabel">Speed</label>
+      <select id="playSpeed">
+        <option value="2000">1x</option>
+        <option value="1200">1.5x</option>
+        <option value="800">2.5x</option>
+        <option value="500">4x</option>
+      </select>
     </div>
 
     <div class="toggle">
@@ -82,6 +124,14 @@
   </div>
 </section>
 
+<!-- Portfolio overview -->
+<section class="portfolio card">
+  <div class="card-title">Portfolio Overview (Entities × Currencies)</div>
+  <div class="hint">Click any tile to focus the main view on that entity + currency.</div>
+  <div id="portfolioGrid" class="portfolioGrid"></div>
+</section>
+
+<!-- Main grid -->
 <section class="grid">
   <div class="card">
     <div class="card-title">Forecast & Buffer</div>
@@ -122,34 +172,13 @@
     </div>
 
     <div class="card">
-      <div class="card-title">What-if (UI-only overlay)</div>
-      <div class="row">
-        <div class="field">
-          <label>Outflow shock (%)</label>
-          <input id="shockPct" type="range" min="0" max="50" value="0"/>
-          <div class="hint"><span id="shockPctVal">0</span>%</div>
-        </div>
-        <div class="field">
-          <label>Inflow delay (min)</label>
-          <input id="delayMin" type="range" min="0" max="60" value="0"/>
-          <div class="hint"><span id="delayMinVal">0</span> min</div>
-        </div>
-        <div class="btns">
-          <button class="btn" id="btnApplyWhatif">Apply</button>
-          <button class="btn" id="btnClearWhatif">Clear</button>
-        </div>
-      </div>
-      <div class="hint">Overlay changes chart only (sellable demo); backend what-if can be added later.</div>
-    </div>
-
-    <div class="card">
       <div class="card-title">Agent Recommendations</div>
       <div id="recs"></div>
 
       <div class="card-title">Approval</div>
       <div class="row">
         <div class="field">
-          <label>Selected action (from agent)</label>
+          <label>Selected action</label>
           <input id="selectedAction" placeholder="click an action below" readonly/>
         </div>
         <div class="btns">
